@@ -29,7 +29,7 @@ from ansible import __version__
 from ansible.utils.display_functions import *
 from ansible.utils.plugins import *
 from ansible.callbacks import display
-from ansible.utils.splitter import split_args, unquote
+from ansible.module_utils.splitter import split_args, unquote
 import ansible.constants as C
 import ast
 import time
@@ -46,6 +46,7 @@ import getpass
 import sys
 import json
 import subprocess
+import contextlib
 
 from vault import VaultLib
 
@@ -55,7 +56,9 @@ MAX_FILE_SIZE_FOR_DIFF=1*1024*1024
 
 # caching the compilation of the regex used
 # to check for lookup calls within data
-LOOKUP_REGEX=re.compile(r'lookup\s*\(')
+LOOKUP_REGEX = re.compile(r'lookup\s*\(')
+PRINT_CODE_REGEX = re.compile(r'(?:{[{%]|[%}]})')
+CODE_REGEX = re.compile(r'(?:{%|%})')
 
 try:
     import json
@@ -355,64 +358,48 @@ def _clean_data(orig_data, from_remote=False, from_inventory=False):
     if not isinstance(orig_data, basestring):
         return orig_data
 
-    data = StringIO.StringIO("")
-
     # when the data is marked as having come from a remote, we always
     # replace any print blocks (ie. {{var}}), however when marked as coming
     # from inventory we only replace print blocks that contain a call to
     # a lookup plugin (ie. {{lookup('foo','bar'))}})
     replace_prints = from_remote or (from_inventory and '{{' in orig_data and LOOKUP_REGEX.search(orig_data) is not None)
 
-    # these variables keep track of opening block locations, as we only
-    # want to replace matched pairs of print/block tags
-    print_openings = []
-    block_openings = []
+    regex = PRINT_CODE_REGEX if replace_prints else CODE_REGEX
 
-    for idx,c in enumerate(orig_data):
-        # if the current character is an opening brace, check to
-        # see if this is a jinja2 token. Otherwise, if the current
-        # character is a closing brace, we backup one character to
-        # see if we have a closing.
-        if c == '{' and idx < len(orig_data) - 1:
-            token = orig_data[idx:idx+2]
-            # if so, and we want to replace this block, push
-            # this token's location onto the appropriate array
-            if token == '{{' and replace_prints:
-                print_openings.append(idx)
-            elif token == '{%':
-                block_openings.append(idx)
-            # finally we write the data to the buffer and write
-            data.seek(0, os.SEEK_END)
-            data.write(c)
-        elif c == '}' and idx > 0:
-            token = orig_data[idx-1:idx+1]
-            prev_idx = -1
-            if token == '%}' and len(block_openings) > 0:
-                prev_idx = block_openings.pop()
-            elif token == '}}' and len(print_openings) > 0:
-                prev_idx = print_openings.pop()
-            # if we have a closing token, and we have previously found
-            # the opening to the same kind of block represented by this
-            # token, replace both occurrences, otherwise we just write
-            # the current character to the buffer
-            if prev_idx != -1:
-                # replace the opening
-                data.seek(prev_idx, os.SEEK_SET)
-                data.write('{#')
-                # replace the closing
-                data.seek(-1, os.SEEK_END)
-                data.write('#}')
+    with contextlib.closing(StringIO.StringIO(orig_data)) as data:
+        # these variables keep track of opening block locations, as we only
+        # want to replace matched pairs of print/block tags
+        print_openings = []
+        block_openings = []
+        for mo in regex.finditer(orig_data):
+            token = mo.group(0)
+            token_start = mo.start(0)
+
+            if token[0] == '{':
+                if token == '{%':
+                    block_openings.append(token_start)
+                elif token == '{{':
+                    print_openings.append(token_start)
+
+            elif token[1] == '}':
+                prev_idx = None
+                if token == '%}' and block_openings:
+                    prev_idx = block_openings.pop()
+                elif token == '}}' and print_openings:
+                    prev_idx = print_openings.pop()
+
+                if prev_idx is not None:
+                    # replace the opening
+                    data.seek(prev_idx, os.SEEK_SET)
+                    data.write('{#')
+                    # replace the closing
+                    data.seek(token_start, os.SEEK_SET)
+                    data.write('#}')
+
             else:
-                data.seek(0, os.SEEK_END)
-                data.write(c)
-        else:
-            # not a jinja2 token, so we just write the current char
-            # to the output buffer
-            data.seek(0, os.SEEK_END)
-            data.write(c)
-    return_data = data.getvalue()
-    data.close()
-    return return_data
+                assert False, 'Unhandled regex match'
+
+        return data.getvalue()
 
 def _clean_data_struct(orig_data, from_remote=False, from_inventory=False):
     '''
@@ -694,8 +681,6 @@ def parse_kv(args):
     ''' convert a string of key/value items to a dict '''
     options = {}
     if args is not None:
-        # attempting to split a unicode here does bad things
-        args = args.encode('utf-8')
         try:
             vargs = split_args(args)
         except ValueError, ve:
@@ -703,11 +688,10 @@ def parse_kv(args):
                 raise errors.AnsibleError("error parsing argument string, try quoting the entire line.")
             else:
                 raise
-        vargs = [x.decode('utf-8') for x in vargs]
         for x in vargs:
             if "=" in x:
                 k, v = x.split("=",1)
-                options[k] = unquote(v)
+                options[k.strip()] = unquote(v.strip())
     return options
 
 def merge_hash(a, b):
@@ -1041,11 +1025,11 @@ def filter_leading_non_json_lines(buf):
     filter only leading lines since multiline JSON is valid.
     '''
 
-    kv_regex = re.compile(r'.*\w+=\w+.*')
+    kv_regex = re.compile(r'\w=\w')
     filtered_lines = StringIO.StringIO()
     stop_filtering = False
     for line in buf.splitlines():
-        if stop_filtering or kv_regex.match(line) or line.startswith('{') or line.startswith('['):
+        if stop_filtering or line.startswith('{') or line.startswith('[') or kv_regex.search(line):
             stop_filtering = True
             filtered_lines.write(line + '\n')
     return filtered_lines.getvalue()
@@ -1260,7 +1244,10 @@ def listify_lookup_plugin_terms(terms, basedir, inject):
         #    with_items: {{ alist }}
 
         stripped = terms.strip()
-        if not (stripped.startswith('{') or stripped.startswith('[')) and not stripped.startswith("/") and not stripped.startswith('set(['):
+        if not (stripped.startswith('{') or stripped.startswith('[')) and \
+           not stripped.startswith("/") and \
+           not stripped.startswith('set([') and \
+           not LOOKUP_REGEX.search(terms):
             # if not already a list, get ready to evaluate with Jinja2
             # not sure why the "/" is in above code :)
             try:

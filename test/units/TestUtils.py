@@ -17,7 +17,7 @@ import ansible.utils
 import ansible.errors
 import ansible.constants as C
 import ansible.utils.template as template2
-from ansible.utils.splitter import split_args
+from ansible.module_utils.splitter import split_args
 
 from ansible import __version__
 
@@ -165,6 +165,8 @@ class TestUtils(unittest.TestCase):
     def test_parse_kv_basic(self):
         self.assertEqual(ansible.utils.parse_kv('a=simple b="with space" c="this=that"'),
                 {'a': 'simple', 'b': 'with space', 'c': 'this=that'})
+        self.assertEqual(ansible.utils.parse_kv('msg=АБВГД'),
+                {'msg': 'АБВГД'})
 
 
     def test_jsonify(self):
@@ -703,8 +705,9 @@ class TestUtils(unittest.TestCase):
         # jinja2 loop blocks with lots of complexity
         _test_combo(
             # in memory of neighbors cat
-            'a {% if x %} y {%else %} {{meow}} {% endif %} cookiechip\ndone',
-            ['a', '{% if x %}', 'y', '{%else %}', '{{meow}}', '{% endif %}', 'cookiechip\ndone']
+            # we preserve line breaks unless a line continuation character preceeds them
+            'a {% if x %} y {%else %} {{meow}} {% endif %} "cookie\nchip" \\\ndone\nand done',
+            ['a', '{% if x %}', 'y', '{%else %}', '{{meow}}', '{% endif %}', '"cookie\nchip"', 'done', '\nand', 'done']
         )
 
         # test space preservation within quotes
@@ -725,6 +728,10 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(
             ansible.utils._clean_data('this string has a {{variable}}', from_remote=True),
             'this string has a {#variable#}'
+        )
+        self.assertEqual(
+            ansible.utils._clean_data('this string {{has}} two {{variables}} in it', from_remote=True),
+            'this string {#has#} two {#variables#} in it'
         )
         self.assertEqual(
             ansible.utils._clean_data('this string has a {{variable with a\nnewline}}', from_remote=True),

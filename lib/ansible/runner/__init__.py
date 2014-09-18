@@ -31,7 +31,6 @@ import sys
 import pipes
 import jinja2
 import subprocess
-import shlex
 import getpass
 
 import ansible.constants as C
@@ -47,7 +46,7 @@ import connection
 from return_data import ReturnData
 from ansible.callbacks import DefaultRunnerCallbacks, vv
 from ansible.module_common import ModuleReplacer
-from ansible.utils.splitter import split_args
+from ansible.module_utils.splitter import split_args
 
 module_replacer = ModuleReplacer(strip_comments=False)
 
@@ -215,6 +214,10 @@ class Runner(object):
         # save the original transport, in case it gets
         # changed later via options like accelerate
         self.original_transport = self.transport
+
+        # enforce complex_args as a dict
+        if type(self.complex_args) != dict:
+            raise errors.AnsibleError("args must be a dictionary, received %s (%s)" % (self.complex_args, type(self.complex_args)))
 
         # misc housekeeping
         if subset and self.inventory._subset is None:
@@ -610,7 +613,12 @@ class Runner(object):
         inject['vars']        = self.module_vars
         inject['defaults']    = self.default_vars
         inject['environment'] = self.environment
-        inject['playbook_dir'] = self.basedir
+        inject['playbook_dir'] = os.path.abspath(self.basedir)
+
+        # template this one is available, callbacks use this
+        delegate_to = self.module_vars.get('delegate_to')
+        if delegate_to:
+            self.module_vars['delegate_to'] = template.template(self.basedir, delegate_to, inject)
 
         if self.inventory.basedir() is not None:
             inject['inventory_dir'] = self.inventory.basedir()
@@ -655,11 +663,6 @@ class Runner(object):
 
         # logic to decide how to run things depends on whether with_items is used
         if items is None:
-            if isinstance(complex_args, basestring):
-                complex_args = template.template(self.basedir, complex_args, inject, convert_bare=True)
-                complex_args = utils.safe_eval(complex_args)
-                if type(complex_args) != dict:
-                    raise errors.AnsibleError("args must be a dictionary, received %s" % complex_args)
             return self._executor_internal_inner(host, self.module_name, self.module_args, inject, port, complex_args=complex_args)
         elif len(items) > 0:
 
@@ -1091,6 +1094,8 @@ class Runner(object):
                     output = 'SSH encountered an unknown error. The output was:\n%s' % (result['stdout']+result['stderr'])
                 else:
                     output = 'SSH encountered an unknown error during the connection. We recommend you re-run the command using -vvvv, which will enable SSH debugging output to help diagnose the issue'
+            elif 'No space left on device' in result['stderr']:
+                output = result['stderr']
             else:
                 output = 'Authentication or permission failure.  In some cases, you may have been able to authenticate and did not have permissions on the remote directory. Consider changing the remote temp path in ansible.cfg to a path rooted in "/tmp". Failed command was: %s, exited with result %d' % (cmd, result['rc'])
             if 'stdout' in result and result['stdout'] != '':

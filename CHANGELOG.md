@@ -1,7 +1,19 @@
 Ansible Changes By Release
 ==========================
 
-## 1.7 "Summer Nights" - Active Development
+## 1.8 "You Really Got Me" - Active Development
+
+
+## 1.7.1 "Summer Nights" - Aug 14, 2014
+
+- Security fix to disallow specifying 'args:' as a string, which could allow the insertion of extra module parameters through variables.
+- Performance enhancements related to previous security fixes, which could cause slowness when modules returned very large JSON results. This specifically impacted the unarchive module frequently, which returns the details of all unarchived files in the result.
+- Docker module bug fixes:
+  * Fixed support for specifying rw/ro bind modes for volumes
+  * Fixed support for allowing the tag in the image parameter
+- Various other bug fixes
+
+## 1.7 "Summer Nights" - Aug 06, 2014
 
 Major new features:
 
@@ -33,6 +45,16 @@ Other notable changes:
 
 * Inventory speed improvements for very large inventories.
 * Vault password files can now be executable, to support scripts that fetch the vault password.
+
+
+## 1.6.10 "And the Cradle Will Rock" - Jul 25, 2014
+
+- Fixes an issue with the copy module when copying a directory that fails when changing file attributes and the target file already exists
+- Improved unicode handling when splitting args
+
+## 1.6.9 "And the Cradle Will Rock" - Jul 24, 2014
+
+- Further improvements to module parameter parsing to address additional regressions caused by security fixes
 
 ## 1.6.8 "And the Cradle Will Rock" - Jul 22, 2014
 

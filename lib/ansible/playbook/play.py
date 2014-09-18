@@ -21,6 +21,7 @@ from ansible.utils.template import template
 from ansible import utils
 from ansible import errors
 from ansible.playbook.task import Task
+from ansible.module_utils.splitter import split_args, unquote
 import ansible.constants as C
 import pipes
 import shlex
@@ -73,6 +74,13 @@ class Play(object):
             self.tags = self.tags.split(",")
         elif type(self.tags) != list:
             self.tags = []
+
+        # make sure we have some special internal variables set
+        self.vars['playbook_dir'] = os.path.abspath(self.basedir)
+        if self.playbook.inventory.basedir() is not None:
+            self.vars['inventory_dir'] = self.playbook.inventory.basedir()
+        if self.playbook.inventory.src() is not None:
+            self.vars['inventory_file'] = self.playbook.inventory.src()
 
         # We first load the vars files from the datastructure
         # so we have the default variables to pass into the roles
@@ -145,9 +153,6 @@ class Play(object):
 
         load_vars = {}
         load_vars['role_names'] = ds.get('role_names',[])
-        load_vars['playbook_dir'] = self.basedir
-        if self.playbook.inventory.basedir() is not None:
-            load_vars['inventory_dir'] = self.playbook.inventory.basedir()
 
         self._tasks      = self._load_tasks(self._ds.get('tasks', []), load_vars)
         self._handlers   = self._load_tasks(self._ds.get('handlers', []), load_vars)
@@ -524,7 +529,7 @@ class Play(object):
                 task_vars['_original_file'] = original_file
 
             if 'include' in x:
-                tokens = utils.splitter.split_args(str(x['include']))
+                tokens = split_args(str(x['include']))
                 included_additional_conditions = list(additional_conditions)
                 include_vars = {}
                 for k in x:
@@ -537,11 +542,10 @@ class Play(object):
                     elif k.startswith("when_"):
                         utils.deprecated("\"when_<criteria>:\" is a removed deprecated feature, use the simplified 'when:' conditional directly", None, removed=True)
                     elif k == 'when':
-                        if type(x[k]) is str:
-                            included_additional_conditions.insert(0, x[k])
+                        if isinstance(x[k], (basestring, bool)):
+                            included_additional_conditions.append(x[k])
                         elif type(x[k]) is list:
-                            for i in x[k]:
-                                included_additional_conditions.insert(0, i)
+                            included_additional_conditions.extend(x[k])
                     elif k in ("include", "vars", "default_vars", "sudo", "sudo_user", "role_name", "no_log"):
                         continue
                     else:
@@ -560,12 +564,6 @@ class Play(object):
                 if 'vars' in x:
                     task_vars = utils.combine_vars(task_vars, x['vars'])
 
-                if 'when' in x:
-                    if isinstance(x['when'], (basestring, bool)):
-                        included_additional_conditions.append(x['when'])
-                    elif isinstance(x['when'], list):
-                        included_additional_conditions.extend(x['when'])
-
                 new_role = None
                 if 'role_name' in x:
                     new_role = x['role_name']
@@ -573,7 +571,7 @@ class Play(object):
                 mv = task_vars.copy()
                 for t in tokens[1:]:
                     (k,v) = t.split("=", 1)
-                    v = utils.splitter.unquote(v)
+                    v = unquote(v)
                     mv[k] = template(self.basedir, v, mv)
                 dirname = self.basedir
                 if original_file:

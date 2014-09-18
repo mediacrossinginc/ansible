@@ -327,12 +327,15 @@ class Facts(object):
         data = get_file_content('/proc/cmdline')
         if data:
             self.facts['cmdline'] = {}
-            for piece in shlex.split(data):
-                item = piece.split('=', 1)
-                if len(item) == 1:
-                    self.facts['cmdline'][item[0]] = True
-                else:
-                    self.facts['cmdline'][item[0]] = item[1]
+            try:
+                for piece in shlex.split(data):
+                    item = piece.split('=', 1)
+                    if len(item) == 1:
+                        self.facts['cmdline'][item[0]] = True
+                    else:
+                        self.facts['cmdline'][item[0]] = item[1]
+            except ValueError, e:
+                pass
 
     def get_public_ssh_host_keys(self):
         dsa_filename = '/etc/ssh/ssh_host_dsa_key.pub'
@@ -1578,7 +1581,7 @@ class LinuxNetwork(Network):
                         iface = words[-1]
                         if iface != device:
                             interfaces[iface] = {}
-                        if not secondary or "ipv4" not in interfaces[iface]:
+                        if not secondary and "ipv4" not in interfaces[iface]:
                             interfaces[iface]['ipv4'] = {'address': address,
                                                          'netmask': netmask,
                                                          'network': network}
@@ -2039,8 +2042,7 @@ class SunOSNetwork(GenericBsdIfconfigNetwork, Network):
         else:
             current_if = interfaces[device]
         flags = self.get_options(words[1])
-        if 'IPv4' in flags:
-            v = 'ipv4'
+        v = 'ipv4'
         if 'IPv6' in flags:
             v = 'ipv6'
         current_if[v].append({'flags': flags, 'mtu': words[3]})
